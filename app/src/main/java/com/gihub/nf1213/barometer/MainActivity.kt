@@ -15,26 +15,43 @@ import androidx.compose.material.MaterialTheme
 import androidx.compose.material.Surface
 import androidx.compose.material.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.sp
+import androidx.lifecycle.lifecycleScope
 import com.gihub.nf1213.barometer.ui.theme.BarometerTheme
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 
 class MainActivity : ComponentActivity() {
+
+    private var pressure = mutableStateOf(0f)
+    private var logs = mutableListOf<String>()
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
         PeriodicWorker.schedule(this)
 
-        val logs = applicationContext.getSharedPreferences(LOGS_PREFS, Context.MODE_PRIVATE).all
-        val logsFormatted: List<String> = logs.map { "${it.key} ${it.value}" }
+        // add a delay to make sure the worker runs the first time -- will have a database and live data in the future
+        lifecycleScope.launch {
+            delay(1000)
+            val allLogs = applicationContext.getSharedPreferences(LOGS_PREFS, Context.MODE_PRIVATE).all
+            pressure.value = allLogs.values.map { it.toString() }.lastOrNull()?.toFloatOrNull() ?: 0.0f
+            logs.clear()
+            logs.addAll(allLogs.map { "${it.key} ${it.value}" }
+                .dropLast(1) // the last one is our main value, so skip it
+                .reversed() // newest at the top of the list
+                .take(10) // just show 10 most recent
+            )
+        }
 
         setContent {
             Screen(
-                pressure = logs.values.map { it.toString() }.lastOrNull()?.toFloatOrNull() ?: 0.0f,
-                logs = logsFormatted.dropLast(1).reversed().take(10)
+                pressure = pressure.value,
+                logs = logs
             )
         }
     }
