@@ -9,6 +9,7 @@ import android.hardware.Sensor
 import android.hardware.SensorEvent
 import android.hardware.SensorEventListener
 import android.hardware.SensorManager
+import android.util.Log
 import androidx.core.app.NotificationCompat
 import androidx.work.CoroutineWorker
 import androidx.work.ExistingPeriodicWorkPolicy
@@ -16,10 +17,10 @@ import androidx.work.ForegroundInfo
 import androidx.work.PeriodicWorkRequestBuilder
 import androidx.work.WorkManager
 import androidx.work.WorkerParameters
+import com.gihub.nf1213.barometer.db.AppDatabase
+import com.gihub.nf1213.barometer.db.PressureEntry
 import kotlinx.coroutines.delay
 import java.time.LocalDateTime
-import java.time.format.DateTimeFormatter
-import java.time.format.FormatStyle
 import java.util.concurrent.TimeUnit
 
 class PeriodicWorker(
@@ -43,21 +44,17 @@ class PeriodicWorker(
         setForeground(ForegroundInfo(0, createNotification()))
         val sensorManager = applicationContext.getSystemService(Context.SENSOR_SERVICE) as SensorManager
         val pressureSensor = sensorManager.getDefaultSensor(Sensor.TYPE_PRESSURE)
-        val sharedPref = applicationContext.getSharedPreferences(LOGS_PREFS, Context.MODE_PRIVATE)
-        var valueRead = false
+        val db = AppDatabase.getInstance(applicationContext)
+
         var retries = 0
         val maxRetry = 5
-        val timestamp = DateTimeFormatter.ofLocalizedDateTime(FormatStyle.SHORT).format(LocalDateTime.now())
+        var value: Float? = null
         val listener = object : SensorEventListener {
             override fun onSensorChanged(p0: SensorEvent?) {
-                if (!valueRead) {
+                if (value == null) {
                     val hPaPressure = p0?.values?.get(0) ?: 0f
                     val inHgPressure = hPaPressure * HPA_TO_INHG_CONVERSION
-                    sharedPref.edit().putString(
-                        timestamp,
-                        "%.2f".format(inHgPressure)
-                    ).apply()
-                    valueRead = true
+                    value = inHgPressure
                 }
             }
 
@@ -65,15 +62,18 @@ class PeriodicWorker(
 
         }
         sensorManager.registerListener(listener, pressureSensor, SensorManager.SENSOR_DELAY_FASTEST)
-        while (!valueRead && retries < maxRetry) {
+        while (value == null && retries < maxRetry) {
             delay(1000)
-            sensorManager.unregisterListener(listener)
             retries++
+            Log.d("PeriodicWorker", "value $value, retries $retries")
         }
-        if (!valueRead) {
-            sharedPref.edit().putString(timestamp, "Failure").apply()
+        sensorManager.unregisterListener(listener)
+        return if (value != null) {
+            db.pressureDao().insert(PressureEntry(dateTime = LocalDateTime.now(), value = value!!))
+            Result.success()
+        } else {
+            Result.retry()
         }
-        return Result.success()
     }
 
     private fun createNotification(): Notification {
